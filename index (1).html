@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bicycle Parking Capacity Dashboard: Mercedes-AMG F1 HQ</title>
+<style>
+/* ---------- Theme ---------- */
+:root{--bg:#f4f6f8;--text:#1f2933;--border:#d5dae0;--teal:#00a19b;--grey:#7b8794;--red:#d64545}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:"Segoe UI",Arial,sans-serif;line-height:1.5}
+.wrap{max-width:1200px;margin:0 auto;padding:16px}
+header{display:flex;align-items:center;gap:16px;padding:8px 0 16px}
+header h1{font-size:1.5rem;margin:0}
+header p{margin:2px 0 0;color:var(--grey)}
+.card{background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 2px 8px rgba(31,41,51,.08);padding:16px;margin-bottom:16px}
+h2{font-size:1.05rem;margin:0 0 12px}
+summary{cursor:pointer;font-weight:600}
+details ul{margin:10px 0 0;padding-left:20px}
+/* ---------- Controls ---------- */
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.controls button,.controls select{font:inherit;padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:#fff;color:var(--text);cursor:pointer}
+.controls button.active{background:var(--teal);border-color:var(--teal);color:#fff}
+.controls label{margin-left:auto;font-weight:600}
+/* ---------- KPI cards ---------- */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin-bottom:16px}
+.kpis .card{margin:0;text-align:center}
+.kpis span{display:block;font-size:.8rem;color:var(--grey)}
+.kpis b{font-size:1.8rem}
+.kpis .alert b{color:var(--red)}
+/* ---------- Charts ---------- */
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.grid>*{min-width:0}
+.grid .card{margin:0}
+.chart{position:relative;height:300px}
+.section-title{margin:24px 0 12px;font-size:1.15rem}
+/* ---------- Heatmap ---------- */
+.heat{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.8rem;text-align:center}
+th,td{padding:6px 4px;border:1px solid var(--border)}
+td.g{background:#c9ecd9}td.a{background:#ffe3a6}td.r{background:#f2b5b5}
+/* ---------- Recommendation + footer ---------- */
+.reco{border-left:6px solid var(--teal)}
+.reco .big{color:var(--teal);font-weight:700}
+footer{text-align:center;color:var(--grey);font-size:.85rem;padding:12px 0}
+@media(max-width:800px){.grid{grid-template-columns:1fr}.controls label{margin-left:0}header h1{font-size:1.2rem}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<!-- 1. Header -->
+<header>
+  <img src="mercedes-logo.png" alt="Mercedes-AMG Petronas F1 Team logo" height="48" onerror="this.style.display='none'">
+  <div>
+    <h1>Bicycle Parking Capacity Dashboard: Mercedes-AMG F1 HQ</h1>
+    <p>Simulated analysis of bicycle parking demand vs. capacity for cycling engineers</p>
+  </div>
+</header>
+
+<!-- 2. Assumptions (filled from the CONFIG object by JS) -->
+<div class="card">
+  <details>
+    <summary>Data &amp; Assumptions and Limitations</summary>
+    <ul id="assumptions"></ul>
+  </details>
+</div>
+
+<!-- 3. Controls -->
+<div class="card controls">
+  <div id="dayButtons" class="controls"></div>
+  <label for="scenario">Scenario:</label>
+  <select id="scenario"></select>
+</div>
+
+<!-- 4. KPI cards -->
+<div class="kpis" id="kpis"></div>
+
+<!-- 5. Bicycle charts -->
+<div class="grid">
+  <div class="card"><h2>Hourly bicycle demand vs. bicycles parked</h2><div class="chart"><canvas id="cHourly"></canvas></div></div>
+  <div class="card"><h2>Commuters vs. fun riders per hour</h2><div class="chart"><canvas id="cStack"></canvas></div></div>
+  <div class="card"><h2>Peak bicycle demand per day</h2><div class="chart"><canvas id="cPeakDay"></canvas></div></div>
+  <div class="card"><h2>Rider mix across the week</h2><div class="chart"><canvas id="cMix"></canvas></div></div>
+</div>
+
+<!-- 6. Car vs bicycle -->
+<h2 class="section-title">Car vs. Bicycle comparison</h2>
+<div class="grid">
+  <div class="card"><h2>Peak demand as % of capacity, per day</h2><div class="chart"><canvas id="cCmpPeak"></canvas></div></div>
+  <div class="card"><h2>Hourly demand as % of capacity (selected day)</h2><div class="chart"><canvas id="cCmpHour"></canvas></div></div>
+</div>
+
+<!-- 7. Heatmap -->
+<div class="card" style="margin-top:16px">
+  <h2>Weekly heatmap: bicycle demand as % of capacity</h2>
+  <div class="heat"><table id="heatmap"></table></div>
+  <p style="font-size:.8rem;color:#7b8794">Green: below 70% &middot; Amber: 70-100% &middot; Red: above 100% (unmet demand).</p>
+</div>
+
+<!-- 8. Recommendation -->
+<div class="card reco" id="reco"></div>
+
+<footer>Simulated data for academic purposes. Not official Mercedes-AMG data.</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+/* =====================================================
+   CONFIG: every assumption lives here (and is shown in the panel)
+   ===================================================== */
+const CONFIG = {
+  staffPeak: 900,                                   // staff on site on a peak weekday
+  attendance: {Mon:0.8, Tue:1.0, Wed:1.0, Thu:0.95, Fri:0.7, Sat:0.15, Sun:0.05},
+  commuterShare: 0.07,                              // commuters as share of on-site staff
+  funShare: 0.02,                                   // fun riders as share of on-site staff
+  carShare: 0.70,                                   // car users as share of on-site staff
+  weekendFunGroup: 6,                               // assumed extra weekend morning riders
+  bikeCapacity: 60, carCapacity: 700,
+  scenarios: {
+    dry:    {label: "Dry summer day", factor: 1.0},
+    winter: {label: "Winter day",     factor: 0.65},
+    rain:   {label: "Rainy day",      factor: 0.5}
+  },
+  bikesPerCarSpace: 6, carSpaceM2: 12, buffer: 0.10,
+  noise: 0.05, seed: 2026,                          // +/-5% seeded random variation
+  // Share of each group arriving / leaving in each hour (hour = start of the hour)
+  commuteArrive: {7:.25, 8:.55, 9:.20},             // 07:00-09:30, peak 08:00-08:30
+  commuteLeave:  {16:.20, 17:.50, 18:.30},          // 16:30-18:30
+  funArriveWeekday: {10:.05, 12:.30, 13:.30, 17:.20, 18:.15}, // lunchtime + after work
+  funArriveWeekend: {9:.30, 10:.40, 11:.30}         // small weekend morning group
+};
+
+const DAYS = Object.keys(CONFIG.attendance);
+const HOURS = [6,7,8,9,10,11,12,13,14,15,16,17,18,19,20];
+const label = h => String(h).padStart(2, "0") + ":00";
+const TEAL = "#00a19b", TEAL_LIGHT = "#7fd1cd", GREY = "#7b8794", RED = "#d64545", TEXT = "#1f2933";
+
+/* =====================================================
+   SIMULATION
+   ===================================================== */
+// Seeded pseudo-random generator: same numbers on every page load
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rand = mulberry32(CONFIG.seed);
+// One noise factor per day x hour x (commuters, fun riders, cars), generated once
+const NOISE = DAYS.map(() => HOURS.map(() => [0,1,2].map(() => 1 + (rand()*2 - 1) * CONFIG.noise)));
+
+// Fun riders stay 1-2 hours: half leave one hour later, half two hours later
+function funLeave(arrive){
+  const leave = {};
+  for (const h in arrive){ const k = +h;
+    leave[k+1] = (leave[k+1]||0) + arrive[h]*0.5;
+    leave[k+2] = (leave[k+2]||0) + arrive[h]*0.5; }
+  return leave;
+}
+// Cumulative arrivals minus cumulative departures = share still parked at the end of each hour
+function stockCurve(arrive, leave){
+  let cum = 0;
+  return HOURS.map(h => { cum += (arrive[h]||0) - (leave[h]||0); return Math.max(0, cum); });
+}
+const commuteCurve = stockCurve(CONFIG.commuteArrive, CONFIG.commuteLeave); // cars use the same pattern
+const funWeekday = stockCurve(CONFIG.funArriveWeekday, funLeave(CONFIG.funArriveWeekday));
+const funWeekend = stockCurve(CONFIG.funArriveWeekend, funLeave(CONFIG.funArriveWeekend));
+
+// Staff on site, rider totals and hourly rows for one day and scenario
+function dayTotals(d, scen){
+  const staff = CONFIG.staffPeak * CONFIG.attendance[DAYS[d]];
+  const f = CONFIG.scenarios[scen].factor;
+  const fun = (staff * CONFIG.funShare + (d >= 5 ? CONFIG.weekendFunGroup : 0)) * f;
+  return {staff, f, commuters: staff * CONFIG.commuterShare * f, fun};
+}
+function simulate(d, scen){
+  const t = dayTotals(d, scen), funCurve = d >= 5 ? funWeekend : funWeekday;
+  return HOURS.map((h, i) => {
+    const n = NOISE[d][i];
+    const commuters = Math.round(t.commuters * commuteCurve[i] * n[0]);
+    const fun = Math.round(t.fun * funCurve[i] * n[1]);
+    const bikeDemand = commuters + fun;
+    const carDemand = Math.round(t.staff * CONFIG.carShare * commuteCurve[i] * n[2]);
+    return {h, commuters, fun, bikeDemand, carDemand,
+      bikeParked: Math.min(bikeDemand, CONFIG.bikeCapacity),          // physical limit
+      bikeUnmet:  Math.max(0, bikeDemand - CONFIG.bikeCapacity),
+      carParked:  Math.min(carDemand, CONFIG.carCapacity),
+      carUnmet:   Math.max(0, carDemand - CONFIG.carCapacity)};
+  });
+}
+const peak = (rows, key) => Math.max(...rows.map(r => r[key]));
+const pct = (v, cap) => Math.round(v / cap * 100);
+
+/* =====================================================
+   UI STATE + CONTROLS
+   ===================================================== */
+let selDay = 1, selScen = "dry";   // default: Tuesday, dry summer day
+const charts = {};
+
+// Assumptions panel, built from CONFIG
+document.getElementById("assumptions").innerHTML = [
+  `All numbers are <b>simulated</b> from the assumptions below. There are no real counts and nothing here is official Mercedes-AMG data.`,
+  `About ${CONFIG.staffPeak} staff on site on a peak weekday. Attendance factor: ` + DAYS.map(d => `${d} ${CONFIG.attendance[d]}`).join(", ") + `.`,
+  `Bicycle users (estimated): commuters ${CONFIG.commuterShare*100}% of on-site staff, fun riders ${CONFIG.funShare*100}%, plus an assumed ${CONFIG.weekendFunGroup} extra fun riders on weekend mornings.`,
+  `Commuters arrive 07:00-09:30 (peak 08:00-08:30) and leave 16:30-18:30. Fun riders park 1-2 hours, mostly at lunchtime and after work.`,
+  `Car users: ${CONFIG.carShare*100}% of on-site staff, arriving and leaving at similar times to commuters.`,
+  `Assumed capacity: ${CONFIG.bikeCapacity} bicycle spaces and ${CONFIG.carCapacity} car spaces.`,
+  `Scenario bicycle demand multipliers: ` + Object.values(CONFIG.scenarios).map(s => `${s.label} x${s.factor}`).join(", ") + `. Car demand is not changed by the scenario.`,
+  `Space efficiency (assumed): one car space (about ${CONFIG.carSpaceM2} m&sup2;) converts to about ${CONFIG.bikesPerCarSpace} bicycle spaces.`,
+  `Method: hourly parked numbers = cumulative arrivals minus cumulative departures (end-of-hour snapshot), with a seeded random variation of about &plusmn;${CONFIG.noise*100}%. Parked = min(demand, capacity); unmet demand = demand minus capacity when positive.`,
+  `<b>Limitations:</b> weather is simplified to three fixed multipliers, hourly patterns are assumed, and every result depends directly on these assumptions.`
+].map(t => `<li>${t}</li>`).join("");
+
+// Day buttons
+const dayBox = document.getElementById("dayButtons");
+DAYS.forEach((d, i) => {
+  const b = document.createElement("button");
+  b.textContent = d;
+  b.onclick = () => { selDay = i; render(); };
+  dayBox.appendChild(b);
+});
+// Scenario dropdown
+const sel = document.getElementById("scenario");
+sel.innerHTML = Object.entries(CONFIG.scenarios).map(([k, s]) => `<option value="${k}">${s.label} (x${s.factor})</option>`).join("");
+sel.onchange = () => { selScen = sel.value; render(); };
+
+/* =====================================================
+   CHART HELPERS
+   ===================================================== */
+function draw(id, cfg){
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), cfg);
+}
+// Shared options: responsive, legend at the bottom, y axis starts at zero
+function opts(yTitle, extra = {}){
+  return {responsive: true, maintainAspectRatio: false, animation: {duration: 300},
+    plugins: {legend: {position: "bottom"}},
+    scales: {y: {beginAtZero: true, title: {display: true, text: yTitle}, ...(extra.y||{})}, x: extra.x || {}}};
+}
+// Dashed horizontal reference line (capacity or 100%)
+const refLine = (name, value, n) => ({type: "line", label: name, data: Array(n).fill(value),
+  borderColor: TEXT, borderDash: [6,4], borderWidth: 2, pointRadius: 0, fill: false});
+
+/* =====================================================
+   RENDER EVERYTHING
+   ===================================================== */
+function render(){
+  const cap = CONFIG.bikeCapacity, carCap = CONFIG.carCapacity;
+  const week = DAYS.map((_, d) => simulate(d, selScen));   // all days for the chosen scenario
+  const rows = week[selDay], labels = HOURS.map(label);
+
+  [...dayBox.children].forEach((b, i) => b.classList.toggle("active", i === selDay));
+
+  // ----- KPI cards (red when there is a problem) -----
+  const peakDemand = peak(rows, "bikeDemand");
+  const fullHours = week.flat().filter(r => r.bikeDemand >= cap).length;
+  const kpis = [
+    ["Bicycle Capacity", cap + " spaces", false],
+    ["Peak Bicycles Parked", peak(rows, "bikeParked"), false],
+    ["Peak Unmet Demand (bicycles)", peak(rows, "bikeUnmet"), peak(rows, "bikeUnmet") > 0],
+    ["Hours at Full Capacity (this week)", fullHours, fullHours > 0],
+    ["Peak Demand vs Capacity", pct(peakDemand, cap) + "%", peakDemand > cap]
+  ];
+  document.getElementById("kpis").innerHTML = kpis.map(k =>
+    `<div class="card ${k[2] ? "alert" : ""}"><span>${k[0]}</span><b>${k[1]}</b></div>`).join("");
+
+  // ----- 1. Hourly demand vs parked -----
+  draw("cHourly", {type: "line", data: {labels, datasets: [
+    {label: "Bicycle demand (simulated)", data: rows.map(r => r.bikeDemand), borderColor: TEAL, backgroundColor: TEAL, tension: .3},
+    {label: "Bicycles parked", data: rows.map(r => r.bikeParked), borderColor: TEAL, backgroundColor: "rgba(0,161,155,.2)", fill: true, tension: .3, borderWidth: 1},
+    refLine("Capacity (" + cap + ")", cap, HOURS.length)]}, options: opts("Bicycles")});
+
+  // ----- 2. Commuters vs fun riders (stacked) -----
+  draw("cStack", {type: "bar", data: {labels, datasets: [
+    {label: "Commuters", data: rows.map(r => r.commuters), backgroundColor: TEAL},
+    {label: "Fun riders", data: rows.map(r => r.fun), backgroundColor: TEAL_LIGHT}]},
+    options: opts("Bicycles wanting a space", {x: {stacked: true}, y: {stacked: true}})});
+
+  // ----- 3. Peak demand per day (red when above capacity) -----
+  const dayPeaks = week.map(r => peak(r, "bikeDemand"));
+  draw("cPeakDay", {type: "bar", data: {labels: DAYS, datasets: [
+    {label: "Peak bicycle demand", data: dayPeaks, backgroundColor: dayPeaks.map(v => v > cap ? RED : TEAL)},
+    refLine("Capacity (" + cap + ")", cap, DAYS.length)]}, options: opts("Bicycles")});
+
+  // ----- 4. Doughnut: rider mix across the week -----
+  const sumRiders = key => Math.round(DAYS.reduce((s, _, d) => s + dayTotals(d, selScen)[key], 0));
+  draw("cMix", {type: "doughnut", data: {labels: ["Commuters", "Fun riders"],
+    datasets: [{data: [sumRiders("commuters"), sumRiders("fun")], backgroundColor: [TEAL, TEAL_LIGHT]}]},
+    options: {responsive: true, maintainAspectRatio: false, plugins: {legend: {position: "bottom"}}}});
+
+  // ----- 5. Car vs bicycle: peak % per day -----
+  draw("cCmpPeak", {type: "bar", data: {labels: DAYS, datasets: [
+    {label: "Bicycles", data: week.map(r => pct(peak(r, "bikeDemand"), cap)), backgroundColor: TEAL},
+    {label: "Cars", data: week.map(r => pct(peak(r, "carDemand"), carCap)), backgroundColor: GREY},
+    refLine("100% of capacity", 100, DAYS.length)]}, options: opts("% of capacity")});
+
+  // ----- 6. Car vs bicycle: hourly % for the selected day -----
+  draw("cCmpHour", {type: "line", data: {labels, datasets: [
+    {label: "Bicycles", data: rows.map(r => pct(r.bikeDemand, cap)), borderColor: TEAL, backgroundColor: TEAL, tension: .3},
+    {label: "Cars", data: rows.map(r => pct(r.carDemand, carCap)), borderColor: GREY, backgroundColor: GREY, tension: .3},
+    refLine("100% of capacity", 100, HOURS.length)]}, options: opts("% of capacity")});
+
+  // ----- 7. Heatmap -----
+  let html = "<tr><th></th>" + HOURS.map(h => `<th>${label(h)}</th>`).join("") + "</tr>";
+  week.forEach((r, d) => {
+    html += `<tr><th>${DAYS[d]}</th>` + r.map(x => {
+      const p = pct(x.bikeDemand, cap);
+      return `<td class="${p < 70 ? "g" : p <= 100 ? "a" : "r"}">${p}%</td>`;
+    }).join("") + "</tr>";
+  });
+  document.getElementById("heatmap").innerHTML = html;
+
+  // ----- 8. Recommendation: size for the AVERAGE Tue-Thu peak + buffer, not the worst hour -----
+  const busy = [1, 2, 3].map(d => dayPeaks[d]);
+  const avgPeak = busy.reduce((a, b) => a + b) / busy.length;
+  const target = Math.ceil(avgPeak * (1 + CONFIG.buffer));
+  const extra = Math.max(0, target - cap);
+  const carsConverted = Math.ceil(extra / CONFIG.bikesPerCarSpace);
+  const newCarCap = carCap - carsConverted;
+  const maxCar = Math.max(...week.map(r => peak(r, "carDemand")));
+  document.getElementById("reco").innerHTML = `<h2>Recommendation (${CONFIG.scenarios[selScen].label}, simulated)</h2>` +
+    (extra === 0
+      ? `<p>The average Tue-Thu peak (${avgPeak.toFixed(1)} bicycles) plus a ${CONFIG.buffer*100}% buffer fits within the current ${cap} spaces. <b>No extra racks needed</b> in this scenario.</p>`
+      : `<p>Average peak on typical busy weekdays (Tue-Thu): <b>${avgPeak.toFixed(1)} bicycles</b>. With a ${CONFIG.buffer*100}% buffer, plan for <b>${target} spaces</b>.</p>
+         <p>Extra racks needed: <span class="big">${extra}</span> &middot; Car spaces to convert: <span class="big">${carsConverted}</span>
+         (about ${carsConverted * CONFIG.carSpaceM2} m&sup2;, at ${CONFIG.bikesPerCarSpace} bicycle spaces per car space).</p>
+         <p>Car park check: after conversion capacity is ${newCarCap} spaces and the simulated weekly peak car demand is ${maxCar}, so the car park
+         ${maxCar <= newCarCap ? "<b>stays under capacity</b>." : "<b style='color:#d64545'>would exceed capacity</b>."}</p>`) +
+    `<p style="font-size:.85rem;color:#7b8794">Sized on typical busy days, not the single worst hour, so a few peak hours (e.g. lunchtime) may still exceed capacity.</p>`;
+}
+
+// Safety net if the Chart.js CDN is blocked (e.g. offline)
+if (typeof Chart === "undefined") {
+  document.querySelector(".wrap").insertAdjacentHTML("afterbegin", "<p style='color:#d64545'>Chart.js could not be loaded. Check your internet connection.</p>");
+} else {
+  Chart.defaults.font.family = '"Segoe UI", Arial, sans-serif';
+  Chart.defaults.color = TEXT;
+  render();
+}
+</script>
+</body>
+</html>
